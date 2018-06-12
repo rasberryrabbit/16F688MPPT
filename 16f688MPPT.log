@@ -11,4 +11,4 @@ hint: 0	1144	Used ROM (program words): 729 (18%)  Free ROM (program words): 3367
 diagnostics: 0	145	Project Linked Successfully	16f688MPPT.mpppi
 diagnostics: 0	140	Linked in 31 ms	 
 diagnostics: 0	141	Project '16f688MPPT.mpppi' completed: 78 ms	 
-diagnostics: 0	103	Finished successfully: 12 6 2018, 10:38:00	16f688MPPT.mpppi
+diagnostics: 0	103	Finished successfully: 12 6 2018, 11:06:42	16f688MPPT.mpppi
