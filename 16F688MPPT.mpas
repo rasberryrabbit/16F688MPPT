@@ -44,7 +44,7 @@ const
    adc_max_loop = 1;
 
 var
-   LED1:sbit at RC2_bit;
+   LED1:sbit at RC4_bit;
    PWM_SIG:sbit at RC1_bit;
    PWM_FLAG:bit;
    PWM_TICK, ON_PWM, VOL_PWM:byte;
@@ -85,13 +85,14 @@ begin
      CMCON0:=7;
      ANSEL:=%00000101;       // ADC conversion clock = fRC, RA0=Current, RA2=Voltage
      TRISA0_bit:=1;
+     TRISA1_bit:=1;          // Vref
      TRISA2_bit:=1;
      VCFG_bit:=1;
      CHS1_bit:=1;
      ADFM_bit:=1;
      
      TRISC1_bit:=0;          // PWM
-     TRISC2_bit:=0;          // LED
+     TRISC4_bit:=0;          // LED
      TRISC3_bit:=1;          // OP-AMP Cal
 
      LED1:=0;
