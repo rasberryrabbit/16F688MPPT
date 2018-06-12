@@ -44,7 +44,7 @@ const
    adc_max_loop = 1;
 
 var
-   LED1:sbit at RC3_bit;
+   LED1:sbit at RC2_bit;
    PWM_SIG:sbit at RC1_bit;
    PWM_FLAG:bit;
    PWM_TICK, ON_PWM, VOL_PWM:byte;
@@ -56,7 +56,7 @@ var
    flag_inc, got_max :boolean;
    Inc_pwm, eq_cnt : byte;
    vol1, vol2, lo_PWM, hi_PWM : byte;
-   Write_OPAMP : sbit at RC5_bit;
+   Write_OPAMP : sbit at RC3_bit;
    IncPWM_EQ : byte;
    wPWM, wTemp : word;
    Reset_Tick100 : Byte;
@@ -91,7 +91,8 @@ begin
      ADFM_bit:=1;
      
      TRISC1_bit:=0;          // PWM
-     TRISC3_bit:=0;          // LED
+     TRISC2_bit:=0;          // LED
+     TRISC3_bit:=1;          // OP-AMP Cal
 
      LED1:=0;
      PWM_SIG:=1;
@@ -105,6 +106,7 @@ begin
      TMR0IE_bit:=1;
      
      LM358_diff:=cLM358_diff;
+     Delay_10ms;
      {$ifdef Write_OPAMP_DIFF}
      if Write_OPAMP=0 then begin
        Delay_100ms;
