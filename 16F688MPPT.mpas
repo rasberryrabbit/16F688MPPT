@@ -22,62 +22,68 @@ program _16F688MPPT;
 
 
 {$define USE_EEPROM_LM358DIFF}
-{.$define USE_RESET_TIMER}
 {$define Write_OPAMP_DIFF}
-{.$define USE_4MHZ}
+{.$define USE_8MHZ}
+
 const
-   PWM_MAX = 255;            // 75
-   PWM_LOW = 1;
-   PWMHI_DIV = 6;            // 8
-   PWMLO_DIV = 15;           // 14
+   PWM_MAX = 230;
+   PWM_MIN = 1;
+   PWM_MID = (PWM_MAX+PWM_MIN) div 2-5;
 
-   TMR1L_LOAD=$17;
-   TMR1H_LOAD=$FC;           // 2ms
+   TMR1L_LOAD=$30;
+   TMR1H_LOAD=$F8;           // 2ms, 65536 - 2000
 
-   Reset_Tick_Start = 1500;  // 5 minutes
+   VOLMUL = 25 div 6;        // 25V(1024) : 6A(1024), don't exceed 8
+   _UPDATE_INT = 20 div 2;   // consider 90ms
+   _PWM_CHECK = 4500 div 2;
 
-   { circuit modified, 9.6mV / 3600mV * 1024 + 1, eeprom offset 0 => 04
-     circuit v2 has more sensivity on current adc reading( x4 ),
-     it may value 6 but 4. measuring on PIC pin 5 voltage while no loading  }
-   cLM358_diff = 4;
-   Inc_Pwm_Max = 8;          { >=5 }
-   adc_max_loop = 1;
+   cLM358_diff = 0;
+{$ifdef USE_8MHZ}
+   adc_max_loop = 3;     // 4
+{$else}
+   adc_max_loop = 6;     // 8
+{$endif}
+
+label
+   CONTLOOP;
+
 
 var
    LED1:sbit at RC4_bit;
    PWM_SIG:sbit at RC1_bit;
-   PWM_FLAG:bit;
-   PWM_TICK, ON_PWM, VOL_PWM:byte;
-   TICK_1000:Byte;
-   LED1_tm:byte;
-   adc_vol, adc_cur, offset_cur, adc_prev, adc_diff : word;
-   power_prev, power_curr, power_diff : dword;
-   i, LM358_diff:byte;
-   flag_inc, got_max :boolean;
-   Inc_pwm, eq_cnt : byte;
-   vol1, vol2, lo_PWM, hi_PWM : byte;
    Write_OPAMP : sbit at RC3_bit;
-   IncPWM_EQ : byte;
-   wPWM, wTemp : word;
-   Reset_Tick100 : Byte;
-   Reset_Tick : word;
-   
+   ON_PWM, VOLPWM : byte;
+   TICK_1000 : word;
+   doADCRead : byte;
+
+   LED1_tm : byte;
+   prevtime, powertime, voltime : word;
+   adc_vol, adc_cur, vol_prev1, vol_prev2 : word;
+   power_prev, power_curr : dword;
+   i, LM358_diff : byte;
+   flag_inc : boolean;
+   wtmp, xtmp : word;
+
 procedure Interrupt(); iv 0x0004; ics ICS_AUTO;
 begin
      if T0IF_bit=1 then begin
-       if PWM_FLAG=1 then begin
-         ON_PWM:=VOL_PWM;
+       PWM_SIG:=not PWM_SIG;
+       if PWM_SIG=0 then begin
+         doADCRead:=1;
          // on
+         ON_PWM:=VOLPWM;
          TMR0:=255-ON_PWM;
-         PWM_SIG:=0;
-         PWM_FLAG:=0;
        end else begin
          // off
          TMR0:=255-PWM_MAX+ON_PWM;
-         PWM_SIG:=1;
-         PWM_FLAG:=1;
        end;
        T0IF_bit:=0;
+     end;
+     if T1IF_bit=1 then begin
+       TMR1H:=TMR1H_LOAD;
+       TMR1L:=TMR1L_LOAD;
+       T1IF_bit:=0;
+       Inc(TICK_1000);
      end;
 end;
 
@@ -97,196 +103,164 @@ begin
 
      LED1:=0;
      PWM_SIG:=1;
-     PWM_FLAG:=1;
-     LED1_tm:=250;
+     LED1_tm:=100;
      ON_PWM:=0;
-     VOL_PWM:=0;
+     VOLPWM:=0;
      TICK_1000:=0;
 
      OPTION_REG:=%11011111;        // ~4KHz @ 4MHz, 1000000 / 4 = 3.9k
      TMR0IE_bit:=1;
      
      LM358_diff:=cLM358_diff;
-     Delay_10ms;
+     Delay_100ms;
+     Delay_100ms;
+     ClrWDT;
      {$ifdef Write_OPAMP_DIFF}
      if Write_OPAMP=0 then begin
        Delay_100ms;
        Delay_100ms;
-       Delay_100ms;
        adc_cur:=ADC_Read(0);
        EEPROM_Write(0, Lo(adc_cur));
+       Delay_100ms;
+       LED1:=1;
+       Delay_ms(700);
+       LED1:=0;
      end;
+     ClrWDT;
      {$endif}
-     
+
      {$ifdef USE_EEPROM_LM358DIFF}
      Delay_100ms;
      LM358_diff:=EEPROM_Read(0);
      {$endif}
+     if LM358_diff>$1f then
+       LM358_diff:=0;
      
-     IncPWM_EQ:=0;
-     IncPWM_EQ:=EEPROM_Read(3);
-
-     {$ifdef USE_4MHZ}
+     {$ifdef USE_8MHZ}
+     T1CKPS1_bit:=0;
      T1CKPS0_bit:=1;               // timer prescaler 1:2
      {$else}
-     T1CKPS1_bit:=1;               // timer prescaler 1:4
+     T1CKPS1_bit:=0;
+     T1CKPS0_bit:=0;               // timer prescaler 1:1
      {$endif}
      TMR1CS_bit:=0;
      TMR1L:=TMR1L_LOAD;
      TMR1H:=TMR1H_LOAD;
+     T1IF_bit:=0;
 
      adc_vol:=0;
      adc_cur:=0;
      power_curr:=0;
-     vol1:=0;
-     vol2:=0;
-     Reset_Tick100:=100;
-     Reset_Tick:=Reset_Tick_Start;
+     
+     TMR1IE_bit:=1;
+     PEIE_bit:=1;
 
      GIE_bit:=1;                   // enable Interrupt
 
      TMR1ON_bit:=1;
 
-     VOL_PWM:=PWM_LOW;
-     lo_PWM:=PWM_LOW;
-     hi_PWM:=PWM_MAX;
-     flag_inc:=True;
-     adc_prev:=0;
+     VOLPWM:=PWM_MID;
+     flag_inc:=False;
+     vol_prev1:=0;
 
+     powertime:=0;
+     prevtime:=0;
+     voltime:=0;
+
+     // starting LED
+     clrwdt;
+     delay_ms(300);
+     LED1:=1;
+     delay_ms(500);
+     LED1:=0;
+     clrwdt;
+     
      while True do begin
        // LED
-       if T1IF_bit=1 then begin
-         TMR1H:=TMR1H_LOAD;
-         TMR1L:=TMR1L_LOAD;
-         T1IF_bit:=0;
-         Inc(TICK_1000);
-         if TICK_1000>=LED1_tm then begin
-           LED1:=not LED1;
-           TICK_1000:=0;
-         end;
-         {$ifdef USE_RESET_TIMER}
-         // reset tick
-         if Reset_Tick100<>0 then begin
-           Dec(Reset_Tick100);
-         end else begin
-           Reset_Tick100:=100;
-           if Reset_Tick<>0 then begin
-             Dec(Reset_Tick);
-           end else begin
-             Reset_Tick:=Reset_Tick_Start;
-             VOL_PWM:=PWM_LOW;
-             power_curr:=0;
-             Inc_pwm:=Inc_Pwm_Max;
-             flag_inc:=True;
-             vol2:=0;
-             lo_PWM:=0;
-             hi_PWM:=PWM_MAX;
-             Delay_1ms;
-             continue;
-           end;
-         end;
-         {$endif}
+       wtmp := TICK_1000;
+       if wtmp - prevtime > LED1_tm then begin
+         prevtime := wtmp;
+         LED1 := not LED1;
        end;
-       if (VOL_PWM>=(PWM_MAX-1)) then
-         LED1_tm:=64
-         else if (VOL_PWM<=lo_PWM) then
-           LED1_tm:=90
-           else
-             LED1_tm:=120;
+
+       // Read Sync with PWM clock
+       doADCRead:=0;
        // save previous adc values
-       power_prev:=power_curr;
-       adc_prev:=adc_cur;
-       // read adc value
-       adc_vol:=0;
-       adc_cur:=0;
-       for i:=0 to adc_max_loop-1 do begin
-         adc_cur:=adc_cur+ADC_Read(0);
-         adc_vol:=adc_vol+ADC_Read(2);
+       vol_prev2:=vol_prev1;
+       vol_prev1:=adc_vol;
+       while doADCRead=0 do ;
+       // adc read
+       adc_vol:=ADC_Read(2);
+       adc_cur:=ADC_Read(0);
+       for i:=0 to adc_max_loop-2 do begin
+         wtmp:=ADC_Read(2);
+         xtmp:=ADC_Read(0);
+         adc_vol:=(adc_vol+wtmp) div 2;
+         adc_cur:=(adc_cur+xtmp) div 2;
        end;
-       adc_vol:=adc_vol div adc_max_loop;
-       adc_cur:=adc_cur div adc_max_loop;
-       // sub op-amp offset value
-       if adc_cur>word(LM358_diff) then
-         adc_cur:=adc_cur-word(LM358_diff)
-         else
-           adc_cur:=0;
-       //
-       if (adc_cur>0) then begin
-         if lo_PWM=0 then
-           lo_PWM:=VOL_PWM;
-         power_curr:= adc_cur * adc_vol;
-         if power_curr=power_prev then begin
-           Inc_pwm:=0;
-           if adc_cur>adc_prev then begin
-             flag_inc:=False;
-           end else
-           if adc_cur<adc_prev then begin
-             flag_inc:=True;
-           end else begin
-             flag_inc:=not flag_inc;
-           end;
-           vol2:=0;
-           LED1_tm:=240;
-           continue;
-         end else begin
-           if Inc_pwm<Inc_Pwm_Max then
-             Inc(Inc_pwm);
-           if power_curr<power_prev then begin
-             { vol1 = last low PWM }
-             vol1:=VOL_PWM;
-             flag_inc:=not flag_inc;
-             { if set last low and high PWM, make average }
-             if vol2<>0 then begin
-               Inc_pwm:=0;
-               wPWM:=vol1;
-               wPWM:=(wPWM+vol2+1) div 2+3; { >=3 }
-               if (Hi(wPWM)<>0) or (Lo(wPWM)>PWM_MAX) then
-                 wPWM:=word(PWM_MAX)
-                 else if Lo(wPWM)<PWM_LOW then
-                   wPWM:=word(PWM_LOW);
+       adc_vol:=adc_vol * VOLMUL;
 
-               VOL_PWM:=lo(wPWM);
+       // check time
+       wtmp:=TICK_1000;
+       if wtmp - powertime < _UPDATE_INT then
+         goto CONTLOOP;
+       clrwdt;
+       powertime:=wtmp;
 
-               vol2:=0;
-               //
-               wPWM:=(word(PWM_MAX-VOL_PWM)+((PWMHI_DIV+1) div 2)) div PWMHI_DIV;
-               wPWM:=wPWM+word(VOL_PWM);
-               if (Hi(wPWM)<>0) or (Lo(wPWM)>PWM_MAX) then
-                 wPWM:=PWM_MAX;
-               hi_PWM:=lo(wPWM);
-               //
-               wPWM:=(word(VOL_PWM-PWM_LOW)+((PWMLO_DIV+1) div 2)) div PWMLO_DIV;
-               wPWM:=word(VOL_PWM)-wPWM;
-               if (Hi(wPWM)<>0) or (Lo(wPWM)<PWM_LOW) then
-                 wPWM:=PWM_LOW;
-               lo_PWM:=lo(wPWM);
-               continue;
-             end;
-           end else begin
-             { last high PWM }
-             vol2:=VOL_PWM;
-           end;
+       power_prev:= power_curr;
+       power_curr:= adc_vol * adc_cur;
+
+       // prevent low voltage condition
+       wtmp:=TICK_1000;
+       if ON_PWM>PWM_MID then begin
+         if wtmp - voltime > _PWM_CHECK then begin
+           voltime:=wtmp;
+           adc_cur:=LM358_diff;
          end;
+       end else
+         voltime:=wtmp;
+
+       if adc_cur>LM358_diff then begin
+         // power check
+         if power_curr = power_prev then begin
+           LED1_tm:=250;
+           goto CONTLOOP;
+         end else if power_curr < power_prev then begin
+           LED1_tm:=150;
+           flag_inc:=not flag_inc;
+         end else
+           LED1_tm:=200;
+         {
+         if (adc_vol+vol_prev2+1) div 2 < vol_prev1 then begin
+           flag_inc:=true;
+         end;
+         }
        end else begin
-         // no load or low current
+         LED1_tm:=100;
+         VOLPWM:=PWM_MID;
+         flag_inc:=false;
          power_curr:=0;
-         Inc_pwm:=Inc_Pwm_Max;
-         flag_inc:=True;
-         vol2:=0;
-         lo_PWM:=0;
-         hi_PWM:=PWM_MAX;
+         adc_cur:=0;
+         goto CONTLOOP;
        end;
+
        // PWM
        if flag_inc then begin
-         if VOL_PWM<(hi_PWM-Inc_pwm) then begin
-           VOL_PWM:=VOL_PWM+Inc_pwm;
-         end else
-             VOL_PWM:=hi_PWM;
+         if VOLPWM<PWM_MAX then
+           Inc(VOLPWM)
+           else begin
+             VOLPWM:=PWM_MAX;
+             flag_inc:=false;
+           end;
        end else begin
-         if VOL_PWM>(lo_PWM+(Inc_Pwm_Max+1-Inc_pwm)) then begin
-           VOL_PWM:=VOL_PWM-(Inc_Pwm_Max+1-Inc_pwm);
-         end else
-             VOL_PWM:=lo_PWM;
+         if VOLPWM>PWM_MIN then
+           Dec(VOLPWM)
+           else begin
+             VOLPWM:=PWM_MIN;
+             flag_inc:=true;
+           end;
        end;
+CONTLOOP:
+
      end;
 end.
